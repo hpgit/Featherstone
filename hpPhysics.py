@@ -3,101 +3,8 @@ import numpy.linalg as npl
 from enum import Enum
 import math
 from queue import Queue
+from SpatialMath import *
 
-def crossMat(r):
-    rx = np.zeros((3, 3))
-    rx[0, 1] = -r[2]
-    rx[0, 2] = r[1]
-    rx[1, 2] = -r[0]
-
-    rx[1, 0] = r[2]
-    rx[2, 0] = -r[1]
-    rx[2, 1] = r[0]
-
-    return rx
-
-def angleAxisToRotation(angle, axis):
-    cos = math.cos(angle)
-    sin = math.sin(angle)
-    axis_mat = np.reshape(axis, (3, 1))
-    return cos * np.eye(3) + sin*crossMat(axis) + (1.-cos)*np.dot(axis_mat, axis_mat.T)
-
-def dual(_X):
-    X = np.zeros((6, 6))
-    X[:3, :3] = _X[:3, :3]
-    X[:3, 3:] = _X[3:, :3]
-    X[3:, :3] = _X[:3, 3:]
-    X[3:, 3:] = _X[3:, 3:]
-
-    return X
-
-def inv(_X):
-    X = np.zeros((6, 6))
-    X[:3, :3] = _X[:3, :3].T
-    X[:3, 3:] = _X[:3, 3:].T
-    X[3:, :3] = _X[3:, :3].T
-    X[3:, 3:] = _X[3:, 3:].T
-
-    return X
-
-def transf(E, r):
-    X = np.zeros((6, 6))
-    X[:3, :3] = E
-    X[3:, 3:] = E
-    X[3:, :3] = -np.dot(E, crossMat(r))
-
-    return X
-
-def dtransf(E, r):
-    X = np.zeros((6, 6))
-    X[:3, :3] = E
-    X[3:, 3:] = E
-    X[:3, 3:] = -np.dot(E, crossMat(r))
-
-    return X
-
-def invtransf(E, r):
-    X = np.zeros((6, 6))
-    X[:3, :3] = E.T
-    X[3:, 3:] = E.T
-    X[3:, :3] = np.dot(crossMat(r), E.T)
-
-    return X
-
-def dinvtransf(E, r):
-    X = np.zeros((6, 6))
-    X[:3, :3] = E
-    X[3:, 3:] = E
-    X[:3, 3:] = np.dot(crossMat(r), E.T)
-
-    return X
-
-def rot(E):
-    X = np.zeros((6, 6))
-    X[:3, :3] = E
-    X[3:, 3:] = E
-
-    return X
-
-def xlt(r):
-    X = np.eye(6)
-    X[3:, :3] = -crossMat(r)
-
-def spatialCross(v):
-    X = np.zeros((6, 6))
-    X[:3, :3] = crossMat(v[:3])
-    X[3:, :3] = crossMat(v[3:])
-    X[3:, 3:] = crossMat(v[:3])
-
-    return X
-
-def spatialdCross(v):
-    X = np.zeros((6, 6))
-    X[:3, :3] = crossMat(v[:3])
-    X[:3, 3:] = crossMat(v[3:])
-    X[3:, 3:] = crossMat(v[:3])
-
-    return X
 
 def BoxInertia(density, size):
     mass = 8.0 * density * size[0] * size[1] * size[2]
@@ -158,17 +65,24 @@ class JointType(Enum):
 class BoxGeom():
     def __init__(self, x, y, z):
         self.size = np.array([x, y, z])
+        self.color = np.array([0.2, 0.7, 0.7])
+
+    def setColor(self, r, g, b):
+        self.color[0] = .2
+        self.color[1] = .7
+        self.color[2] = .7
 
 
 class Body():
-    def __init__(self):
-        self.parentJoint = None # type : Joint
-        self.parentBody = None  # type : Body
-        self.children = []      # type : list[Body]
-        self.geom = None        # type : BoxGeom
+    def __init__(self, name=None):
+        self.parentJoint = None # type: Joint
+        self.parentBody = None  # type: Body
+        self.children = []      # type: list[Body]
+        self.geom = None        # type: BoxGeom
+
+        self.name = name
 
         self.I = np.zeros((6, 6))
-        self.X_T = np.zeros((6, 6))  # parent body to parent joint on parent body coordinates
 
         self.initE = np.eye(3)
         self.initr = np.zeros(3)
@@ -194,16 +108,27 @@ class Body():
     def setInertia(self, I):
         self.I = I
 
+    def setGeom(self, geom):
+        self.geom = geom
+
 
 class Joint():
     def __init__(self, jointType, axis=list()):
         # assert jointType != JointType.NullJoint and jointType < JointType.Length
-        assert JointType.NullJoint <= jointType < JointType.Length
+        # assert JointType.NullJoint <= jointType < JointType.Length
         self.jointType = jointType
+        self.name = None # type: str
         self.S = None  # type: np.array
         self.dof = 0
 
         self.initE = np.eye(3)
+        self.initr = np.zeros(3)
+
+        self.i_X_jp = np.eye(6)  # joint to child body on joint coordinate after joint value adopted
+        self.X_T = np.zeros((6, 6))  # parent body to joint on parent body coordinates
+
+        self.parentBody = None  # type: Body
+        self.childBody = None  # type: Body
 
         if jointType == JointType.FixedJoint:
             raise NotImplementedError
@@ -230,6 +155,9 @@ class Joint():
     def setInitRotation(self, _E):
         self.initE = _E
 
+    def setInitPosition(self, _r):
+        self.initr = _r
+
     def getTransform(self, q):
         jointType = self.jointType
         E = np.eye(3)
@@ -244,12 +172,18 @@ class Joint():
             E = angleAxisToRotation(q, self.S[:3, 0].reshape(3))
         elif jointType == JointType.BallJoint:
             norm = npl.norm(q)
-            E = angleAxisToRotation(norm, q/norm)
+            if abs(norm) < 0.0000001:
+                E = np.eye(3)
+            else:
+                E = angleAxisToRotation(norm, q/norm)
         elif jointType == JointType.PrismaticJoint:
             r = q * self.S[3:, 0].reshape(3)
         elif jointType == JointType.FreeJoint:
             norm = npl.norm(q[:3])
-            E = angleAxisToRotation(norm, q[:3]/norm)
+            if abs(norm) < 0.0000001:
+                E = np.eye(3)
+            else:
+                E = angleAxisToRotation(norm, q[:3]/norm)
             r = q[3:]
 
         return E, r
@@ -266,7 +200,7 @@ class Skeleton():
         self.q = np.zeros(0)
         self.dq = np.zeros(0)
 
-        self.gravity = [0., -9.81, 0., 0., 0., 0.]
+        self.gravity = np.array([0., 0., 0., 0., 0., -9.81])
 
         self.dof = 1
 
@@ -292,6 +226,7 @@ class Skeleton():
 
         self.dof = qIdx
 
+        # set lambda array
         self.lamb.append(0)
         for i in range(1, len(self.bodies)):
             parentIdx = self.bodies.index(self.bodies[i].parentBody)
@@ -301,18 +236,29 @@ class Skeleton():
         self.dq = np.zeros(qIdx)
         self.ddq = np.zeros(qIdx)
 
-        self.bodies[0].X_T = np.eye(6)
+        # set X_T
+        self.joints[0].X_T = np.eye(6)
+
+        for i in range(1, len(self.joints)):
+            joint = self.joints[i]
+            parentBody = joint.parentBody
+            joint.X_T = np.dot(transf(joint.initE, joint.initr), invtransf(parentBody.initE, parentBody.initr))
+
+        # set i_X_jp
+        for joint in self.joints:
+            childBody = joint.childBody
+            joint.i_X_jp = np.dot(transf(childBody.initE, childBody.initr), invtransf(joint.initE, joint.initr))
 
     def jcalc(self, jointIdx, q, dq):
         # return X_J, S_i, v_J, c_J
         joint = self.joints[jointIdx]
-        X_J = transf(*joint.getTransform(q))
+        X_J = np.dot(joint.i_X_jp, transf(*joint.getTransform(q)))
         return X_J, joint.S, np.dot(joint.S, dq), np.zeros(6)
 
     def jcalcPos(self, jointIdx, q):
         # return X_J, S_i
         joint = self.joints[jointIdx]
-        X_J = transf(*joint.getTransform(q))
+        X_J = np.dot(joint.i_X_jp, transf(*joint.getTransform(q)))
         return X_J, joint.S
 
     def calcBiasForces(self, q, dq, f_ext):
@@ -336,7 +282,10 @@ class Skeleton():
             f_p = f_p + np.dot(p_Xd_i, f_i)
         p_c_0 = f_0
         '''
-        self.bodies[0]._a_vp = self.gravity.copy()
+        self.bodies[0]._a_vp = -self.gravity
+        # self.bodies[0]._X_0 = self.joints[0].getTransform(q[:6])
+        self.bodies[0]._X_0 = np.eye(6)
+        self.bodies[0]._v = np.dot(self.joints[0].S, dq[:6])
 
         for i in range(1, len(bodies)):
             body = self.bodies[i]
@@ -345,22 +294,33 @@ class Skeleton():
             jointqIdx = self.jointqidx[i]
 
             X_J, S_i, v_J, c_J = self.jcalc(i, q[jointqIdx:jointqIdx+jointDof], dq[jointqIdx:jointqIdx+jointDof])
-            body._X_p = np.dot(X_J, body.X_T)
+            body._X_p = np.dot(X_J, joint.X_T)
             if self.lamb[i] != 0:
-                body.X_0 = np.dot(body._X_p, body.parentBody._X_0)
-            body._v = np.dot(body._X_p, body._v) + v_J
+                body._X_0 = np.dot(body._X_p, body.parentBody._X_0)
+            else:
+                body._X_0 = body._X_p.copy()
+            body._v = np.dot(body._X_p, body.parentBody._v) + v_J
             body._a_vp = np.dot(body._X_p, body.parentBody._a_vp) + c_J + np.dot(spatialCross(body._v), v_J)
-            body._f = np.dot(body.I, body._a_vp) + np.dot(spatialdCross(body._v), np.dot(body.I, body._v)) - np.dot(dual(body.X_0), f_ext[6*i:6*i+6])
+            body._f = np.dot(body.I, body._a_vp) + np.dot(spatialdCross(body._v), np.dot(body.I, body._v)) - np.dot(dual(body._X_0), f_ext[6*i:6*i+6])
+
         body = self.bodies[0]
         body._f = np.dot(body.I, body._a_vp) + np.dot(spatialdCross(body._v), np.dot(body.I, body._v)) - f_ext[:6]
-        for i in range(len(bodies), 0, -1):
+
+        for i in range(len(self.bodies)):
+            print(self.bodies[i].name + '\n' + str(self.bodies[i]._X_0))
+
+        for i in range(len(bodies)-1, 0, -1):
             body = self.bodies[i]
-            body._C = np.dot(body.parentJoint.S, body._f)
+            body._C = np.dot(body.parentJoint.S.T, body._f)
             body.parentBody._f = body.parentBody._f + np.dot(dual(inv(body._X_p)), body._f)
         p_c_0 = self.bodies[0]._f
 
+        print(p_c_0)
+        for i in range(1, len(self.bodies)):
+            print(self.bodies[i].name + str(self.bodies[i]._C))
+
     def calcMassMatrix(self, q):
-        H = np.zeros(self.dof, self.dof)
+        H = np.zeros((self.dof, self.dof))
         '''
         for i in range(len(bodies)):
             I_c_i = I_i
@@ -385,13 +345,13 @@ class Skeleton():
             dof = joint.dof
             qIdx = self.jointqidx[i]
             X_J, S_i = self.jcalcPos(i, q[qIdx:qIdx+dof])
-            body._X_p = np.dot(X_J, body.X_T)
+            body._X_p = np.dot(X_J, joint.X_T)
             if self.lamb[i] != 0:
-                body.X_0 = np.dot(body._X_p, body.parentBody._X_0)
+                body._X_0 = np.dot(body._X_p, body.parentBody._X_0)
             else:
-                body.X_0 = body._X_p.copy()
+                body._X_0 = body._X_p.copy()
 
-        for i in range(len(self.bodies), 0, -1):
+        for i in range(len(self.bodies)-1, 0, -1):
             body = self.bodies[i]
             joint = self.joints[i]
             dof = joint.dof
@@ -412,3 +372,4 @@ class Skeleton():
                 H[jqIdx:jqIdx+jdof, qIdx:qIdx+dof] = H[qIdx:qIdx+dof, jqIdx:jqIdx+jdof].T
             bodyj = self.bodies[j]
             body._F = np.dot(dual(inv(bodyj._X_0)), body._F)
+        print(H)

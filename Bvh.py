@@ -1,4 +1,8 @@
 import numpy as np
+import numpy.linalg as npl
+import math
+from SpatialMath import rotx, roty, rotz
+
 
 class BvhJoint():
     def __init__(self, name):
@@ -9,11 +13,10 @@ class BvhJoint():
         self.parent = None  # type: BvhJoint
         self.children = []  # type: list[BvhJoint]
 
+
 class Bvh():
-    def __init__(self, filename=None):
+    def __init__(self, filename=None, ratio=1.):
         self.rot = np.eye(3)
-        if filename is not None:
-            self.constructFromBvhFile(filename)
 
         self.root = None  # type: BvhJoint
         self.joints = []  # type: list[BvhJoint]
@@ -24,6 +27,9 @@ class Bvh():
 
         self.numFrames = 0
         self.frameTime = 0.
+
+        if filename is not None:
+            self.constructFromBvhFile(filename, ratio)
 
     def getJointNum(self):
         return len(self.joints)
@@ -113,7 +119,7 @@ class Bvh():
             for j in range(3):
                 self.channels[i].append(ratio * float(s.pop(0)))
             for j in range(3, channelBeginIdx):
-                self.channels[i].append(ratio * float(s.pop(0)))
+                self.channels[i].append(float(s.pop(0)))
 
     def getJointIndex(self, name):
         for i in range(len(self.joints)):
@@ -143,7 +149,6 @@ class Bvh():
             parent_rotation = np.eye(3)
             if frame >= 0:
                 parent_rotation = self.getJointGlobalRotationAfter(frame, joint.parent)
-
             parent_pos = self.getJointPosition(frame, joint.parent)
             pos_temp = np.dot(self.rot, joint.offsetFromParent)
             pos_temp1 = np.dot(parent_rotation, pos_temp)
@@ -156,19 +161,46 @@ class Bvh():
     def getBonePosition(self, frame, jointIdx):
         joint = self.joints[jointIdx]
 
-        pass
+        if len(joint.children) > 1:
+            pos = np.zeros(3)
+            for child in joint.children:
+                pos += self.getJointPosition(frame, child)
+            return pos/len(joint.children)
+
+        else:
+            return .5*(self.getJointPosition(frame, joint) + self.getJointPosition(frame, joint.children[0]))
 
     def getBoneLength(self, jointIdx):
-        pass
+        joint = self.joints[jointIdx]
+        if len(joint.children) > 0:
+            return npl.norm(joint.offsetFromParent)
+        else:
+            return -1.
 
     def getJointLocalRotationAtPredecessor(self, frame, joint):
-        pass
+        ori_rotation = self.getOriginalJointLocalRotationAtPredecessor(frame, joint)
+        return np.dot(self.rot, np.dot(ori_rotation, self.rot.T))
 
     def roate(self, rotation):
         self.rot = rotation
 
     def getOriginalJointLocalRotationAtPredecessor(self, frame, joint):
-        pass
+        channelBeginIdx = self.getJointChannelIndex(joint)
+        angle_temp = np.zeros(3)
+        if joint.parent is None:
+            angle_temp = self.channels[frame][channelBeginIdx+3:channelBeginIdx+6]
+        else:
+            angle_temp = self.channels[frame][channelBeginIdx+0:channelBeginIdx+3]
+
+        # degree to radian
+        angles = angle_temp*math.pi/180.
+
+        return np.dot(rotz(angles[0]), np.dot(rotx(angles[1]), roty(angles[2])))
 
     def getOriginalJointGlobalRotationAfter(self, frame, joint):
-        pass
+        if joint.parent is None:
+            return self.getOriginalJointLocalRotationAtPredecessor(frame, joint)
+        else:
+            prerotation = self.getOriginalJointGlobalRotationAfter(frame, joint.parent)
+            localRotation = self.getOriginalJointLocalRotationAtPredecessor(frame, joint)
+            return np.dot(prerotation, localRotation)
