@@ -49,6 +49,16 @@ def TorusInertia(density, ring_rad, tube_rad):
     I[3:, 3:] = mass * np.eye(3)
     return I
 
+def InertiaTransf(I, c):
+    Ic = I.copy()
+    mass = I[5, 5]
+    cskew = crossMat(c)
+    Ic[:3, :3] -= mass * np.dot(cskew, cskew)
+    Ic[:3, 3:] = mass * cskew
+    Ic[3:, :3] = -mass * cskew
+
+    return Ic
+
 class JointType(Enum):
     NullJoint = 0
     FixedJoint = 1
@@ -87,6 +97,7 @@ class Body():
         self.initE = np.eye(3)
         self.initr = np.zeros(3)
         self.com = np.zeros(3)
+        
 
         # internal variables
         self._X_p = np.zeros((6, 6))  # parent body to this body on parent body coordinates
@@ -121,6 +132,7 @@ class Joint():
         self.S = None  # type: np.array
         self.dof = 0
 
+        self.childBodyCom = np.zeros(3)
         self.initE = np.eye(3)
         self.initr = np.zeros(3)
 
@@ -151,6 +163,8 @@ class Joint():
         elif jointType == JointType.FreeJoint:
             self.S = np.eye(6)
             self.dof = 6
+
+        self._C = np.zeros(self.dof)
 
     def setInitRotation(self, _E):
         self.initE = _E
@@ -190,6 +204,76 @@ class Joint():
 
     def getdSdq(self):
         pass
+
+    def getJacobianParam(self, q):
+        theta = npl.norm(q)
+        theta_2 = theta*theta
+        alpha = 0.
+        beta = 0.
+        gamma = 0.
+        if theta < 0.00001:
+            alpha = 1. - theta_2 / 6.
+            beta = .5 - theta_2 / 24.
+            gamma = 1./6. - theta_2 / 120.
+        else:
+            alpha= math.sin(theta)/theta
+            beta = (1.-math.cos(theta))/theta_2
+            gamma = (1.-alpha)/theta_2
+
+        return theta, alpha, beta, gamma
+
+    def getDJacobianParam(self, q, dq, q_dot_dq, theta, alpha, beta, gamma):
+        theta_2 = theta * theta
+        d_alpha = 0.
+        d_beta = 0.
+        d_gamma = 0.
+
+        if theta < 0.00001:
+            d_alpha = (-1./3. + theta_2/6.) * q_dot_dq
+            d_beta = (-1./12. + theta_2/180.) * q_dot_dq
+            d_gamma = (-1./60. + theta_2/1260.) * q_dot_dq
+        else:
+            d_alpha = (gamma - beta) * q_dot_dq
+            d_beta = (alpha - 2.*beta) * q_dot_dq / theta_2
+            d_gamma = (beta - 3.*gamma) * q_dot_dq / theta_2
+
+        return d_alpha, d_beta, d_gamma
+
+
+    def getV(self, q, dq):
+        V = np.zeros(6)
+        if self.jointType == JointType.BallJoint:
+            theta, alpha, beta, gamma = self.getJacobianParam(q)
+            qskew = crossMat(q)
+            J = np.eye(3) - beta * qskew + gamma*np.dot(qskew, qskew)
+            V[:3] = np.dot(J, dq)
+
+        elif self.jointType == JointType.FreeJoint:
+            qskew = crossMat(q[:3])
+            theta, alpha, beta, gamma = self.getJacobianParam(q[:3])
+            J = np.eye(3) - beta * qskew + gamma*np.dot(qskew, qskew)
+            V[:3] = np.dot(J, dq[:3])
+            V[3:] = dq[3:].copy()
+        return V
+
+    def getCoriolisDV(self, _q, _dq):
+        DV = np.zeros(6)
+        if self.jointType == JointType.BallJoint:
+            q = _q
+            dq = _dq
+            q_dot_dq = np.dot(q, dq)
+            theta, alpha, beta, gamma = self.getJacobianParam(q)
+            d_alpha, d_beta, d_gamma = self.getDJacobianParam(q, dq, q_dot_dq, theta, alpha, beta, gamma)
+            DV[:3] = (d_alpha + gamma*q_dot_dq)*dq + d_beta * np.cross(dq, q) + (d_gamma*q_dot_dq + gamma * np.dot(dq, dq))*q
+        elif self.jointType == JointType.FreeJoint:
+            q = _q[:3]
+            dq = _dq[:3]
+            q_dot_dq = np.dot(q, dq)
+            theta, alpha, beta, gamma = self.getJacobianParam(q)
+            d_alpha, d_beta, d_gamma = self.getDJacobianParam(q, dq, q_dot_dq, theta, alpha, beta, gamma)
+            DV[:3] = (d_alpha + gamma*q_dot_dq)*dq + d_beta * np.cross(dq, q) + (d_gamma*q_dot_dq + gamma * np.dot(dq, dq))*q
+        return DV
+
 
 class Skeleton():
     def __init__(self):
@@ -248,12 +332,27 @@ class Skeleton():
         for joint in self.joints:
             childBody = joint.childBody
             joint.i_X_jp = np.dot(transf(childBody.initE, childBody.initr), invtransf(joint.initE, joint.initr))
+            joint.childBodyCom = childBody.initr - joint.initr
+
+    def getBodyByName(self, name):
+        for body in self.bodies:
+            if body.name == name:
+                return body
+
+    def getJointByName(self, name):
+        for joint in self.joints:
+            if joint.name == name:
+                return joint
+
+    def getJointQidxByName(self, name):
+        return self.jointqidx[self.joints.index(self.getJointByName(name))]
 
     def jcalc(self, jointIdx, q, dq):
         # return X_J, S_i, v_J, c_J
         joint = self.joints[jointIdx]
         X_J = np.dot(joint.i_X_jp, transf(*joint.getTransform(q)))
         return X_J, joint.S, np.dot(joint.S, dq), np.zeros(6)
+        # return X_J, joint.S, joint.getV(q, dq), np.zeros(6)
 
     def jcalcPos(self, jointIdx, q):
         # return X_J, S_i
@@ -262,6 +361,13 @@ class Skeleton():
         return X_J, joint.S
 
     def calcBiasForces(self, q, dq, f_ext):
+        if q is None:
+            q = self.q
+        if dq is None:
+            dq = self.dq
+        if f_ext is None:
+            f_ext = np.zeros(6*len(self.bodies))
+
         bodies = self.bodies
         joints = self.joints
 
@@ -282,42 +388,112 @@ class Skeleton():
             f_p = f_p + np.dot(p_Xd_i, f_i)
         p_c_0 = f_0
         '''
-        self.bodies[0]._a_vp = -self.gravity
+        nameSet = [
+            'Hips',
+            'LeftUpLeg',
+            'Spine',
+            'RightUpLeg',
+            'RightLeg',
+            'RightFoot',
+            'RightToes',
+            'Spine1',
+            'RightShoulder',
+            'LeftShoulder1',
+            'Head',
+            'LeftArm',
+            'LeftForeArm',
+            'LeftHand',
+            'RightArm',
+            'RightForeArm',
+            'RightHand',
+            'LeftLeg',
+            'LeftFoot',
+            'LeftToes']
+
+        joint = self.joints[0]
+        # self.bodies[0]._a_vp = -self.gravity
+        # self.bodies[0]._a_vp = -np.dot(joint.i_X_jp, np.dot(transf(*joint.getTransform(q[:6])), self.gravity))
+        self.bodies[0]._a_vp = np.dot(joint.i_X_jp,
+                                      self.joints[0].getCoriolisDV(q[:6], dq[:6]) - np.dot(transf(*joint.getTransform(q[:6])), self.gravity))
         # self.bodies[0]._X_0 = self.joints[0].getTransform(q[:6])
         self.bodies[0]._X_0 = np.eye(6)
-        self.bodies[0]._v = np.dot(self.joints[0].S, dq[:6])
+        # self.bodies[0]._v = joint.getV(q[:6], dq[:6])
+        self.bodies[0]._v = np.dot(joint.i_X_jp, joint.getV(q[:6], dq[:6]))
 
         for i in range(1, len(bodies)):
             body = self.bodies[i]
             joint = self.joints[i]
             jointDof = joint.dof
             jointqIdx = self.jointqidx[i]
+            joint_q = q[jointqIdx:jointqIdx+jointDof]
+            joint_dq = dq[jointqIdx:jointqIdx+jointDof]
 
-            X_J, S_i, v_J, c_J = self.jcalc(i, q[jointqIdx:jointqIdx+jointDof], dq[jointqIdx:jointqIdx+jointDof])
+            X_J, S_i, v_J, c_J = self.jcalc(i, joint_q, joint_dq)
             body._X_p = np.dot(X_J, joint.X_T)
             if self.lamb[i] != 0:
                 body._X_0 = np.dot(body._X_p, body.parentBody._X_0)
             else:
                 body._X_0 = body._X_p.copy()
-            body._v = np.dot(body._X_p, body.parentBody._v) + v_J
-            body._a_vp = np.dot(body._X_p, body.parentBody._a_vp) + c_J + np.dot(spatialCross(body._v), v_J)
+
+            # original version
+            # body._v = np.dot(body._X_p, body.parentBody._v) + v_J
+            # body._a_vp = np.dot(body._X_p, body.parentBody._a_vp) + c_J + np.dot(spatialCross(body._v), v_J)
+
+            # transformed joint to body version
+            # body._v = np.dot(body._X_p, body.parentBody._v) + np.dot(joint.i_X_jp, v_J)
+            # body._a_vp = np.dot(body._X_p, body.parentBody._a_vp) + c_J + np.dot(spatialCross(body._v), np.dot(joint.i_X_jp, v_J))
+
+            # transformed joint to body version + exponential coordinate version
+            body._v = np.dot(body._X_p, body.parentBody._v) + np.dot(joint.i_X_jp, v_J)
+            body._a_vp = np.dot(body._X_p, body.parentBody._a_vp) + np.dot(joint.i_X_jp, joint.getCoriolisDV(joint_q, joint_dq))
+
             body._f = np.dot(body.I, body._a_vp) + np.dot(spatialdCross(body._v), np.dot(body.I, body._v)) - np.dot(dual(body._X_0), f_ext[6*i:6*i+6])
 
         body = self.bodies[0]
         body._f = np.dot(body.I, body._a_vp) + np.dot(spatialdCross(body._v), np.dot(body.I, body._v)) - f_ext[:6]
 
         for i in range(len(self.bodies)):
-            print(self.bodies[i].name + '\n' + str(self.bodies[i]._X_0))
+            body = self.getBodyByName(nameSet[i])
+            print(body.name + ' _v\n', body._v)
+            print(body.name + ' _a_vp\n', body._a_vp)
+            print(body.name + ' _v\n', body.I)
 
         for i in range(len(bodies)-1, 0, -1):
             body = self.bodies[i]
-            body._C = np.dot(body.parentJoint.S.T, body._f)
+            joint = body.parentJoint
+
+            # original version
+            # body._C = np.dot(body.parentJoint.S.T, body._f)
+
+            # transformed joint to body version
+            joint._C = np.dot(body.parentJoint.S.T, np.dot(dual(inv(joint.i_X_jp)), body._f))
             body.parentBody._f = body.parentBody._f + np.dot(dual(inv(body._X_p)), body._f)
         p_c_0 = self.bodies[0]._f
 
-        print(p_c_0)
-        for i in range(1, len(self.bodies)):
-            print(self.bodies[i].name + str(self.bodies[i]._C))
+        # print(p_c_0)
+        # for i in range(1, len(self.bodies)):
+        #     print(self.bodies[i].name, self.bodies[i]._f)
+
+        # for i in range(1, len(self.bodies)):
+        #     print(self.bodies[i].name, self.bodies[i]._C)
+
+        C = np.zeros(self.dof)
+        Cidx = 0
+
+        for j in range(6):
+            # print(p_c_0[j])
+            C[Cidx] = p_c_0[j]
+            Cidx += 1
+
+        for i in range(1, len(nameSet)):
+            c = self.getJointByName(nameSet[i])._C
+            for j in range(3):
+                # print(c[j])
+                C[Cidx] = c[j]
+                Cidx += 1
+        return C
+
+
 
     def calcMassMatrix(self, q):
         H = np.zeros((self.dof, self.dof))

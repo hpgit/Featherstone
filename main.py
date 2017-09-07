@@ -3,7 +3,15 @@ from Bvh import Bvh, BvhJoint
 from SpatialMath import *
 import numpy.linalg as npl
 
+np.set_printoptions(precision=6, suppress=True, threshold=np.inf)
+
 DEBUG = False
+
+def importVectorFromFile(filename):
+    file = open(filename)
+    s = file.read().split()
+    file.close()
+    return np.array([float(d) for d in s])
 
 
 bodyIdxToBvhJoint = []  # type: list[BvhJoint]
@@ -79,7 +87,6 @@ def buildHumanoidFromBvh(bvh):
             bone_size = joint_pos_max - joint_pos_min
             for k in range(3):
                 bone_size[k] = max([bone_size[k], bone_width])
-            print('bone_size: '+str(bone_size))
 
             joint_pos_ave /= children_size
             joint_pos_ave += offset_z
@@ -90,9 +97,10 @@ def buildHumanoidFromBvh(bvh):
             geoms.append(BoxGeom(bone_size[0], bone_size[1], bone_size[2]))
             bodies[i].setGeom(geoms[i])
 
-        print('name: ' + bodies[i].name +', size: '+str(bodies[i].geom.size) + ',  inertia: \n'+str(bodies[i].I))
-        print('pos: ' + str(bodies[i].initr))
-        print('rot: ' + str(bodies[i].initE))
+        if DEBUG:
+            print('name: ' + bodies[i].name +', size: '+str(bodies[i].geom.size) + ',  inertia: \n'+str(bodies[i].I))
+            print('pos: ' + str(bodies[i].initr))
+            print('rot: ' + str(bodies[i].initE))
 
         if i == 0:
             bodies[i].parentJoint = Joint(JointType.FreeJoint)
@@ -130,5 +138,50 @@ humanoid = buildHumanoidFromBvh(bvh)
 dof = humanoid.dof
 numBody = len(humanoid.bodies)
 
-humanoid.calcBiasForces(q=np.zeros(dof), dq=np.zeros(dof), f_ext=np.zeros(numBody*6))
+
+qidx = humanoid.getJointQidxByName('LeftToes')
+
+dq = np.zeros(dof)
+dq[qidx+1] = 100.
+q = np.zeros(dof)
+q[0] = 0.
+
+C = humanoid.calcBiasForces(q=q, dq=dq, f_ext=np.zeros(numBody*6)).round(decimals=6)
+Ctrue = importVectorFromFile('vector.txt')
+
+nameSet = [
+    'Hips',
+    'LeftUpLeg',
+    'Spine',
+    'RightUpLeg',
+    'RightLeg',
+    'RightFoot',
+    'RightToes',
+    'Spine1',
+    'RightShoulder',
+    'LeftShoulder1',
+    'Head',
+    'LeftArm',
+    'LeftForeArm',
+    'LeftHand',
+    'RightArm',
+    'RightForeArm',
+    'RightHand',
+    'LeftLeg',
+    'LeftFoot',
+    'LeftToes']
+
+for i in range(len(C)):
+    if (i >= 6 and i % 3 == 0) or i==0:
+        nameIdx = int(i/3)
+        if i>=6:
+            nameIdx -= 1
+        print('\n', nameSet[nameIdx])
+
+    print(C[i], Ctrue[i])
+
+print('\n\n', npl.norm(C-Ctrue))
+
 # humanoid.calcMassMatrix(q=np.zeros(dof))
+
+
