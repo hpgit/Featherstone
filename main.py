@@ -142,9 +142,9 @@ numBody = len(humanoid.bodies)
 qidx = humanoid.getJointQidxByName('LeftToes')
 
 dq = np.zeros(dof)
-dq[qidx+1] = 100.
+dq[qidx+2] = 100.
 q = np.zeros(dof)
-q[qidx+1] = 100.
+# q[qidx+1] = 100.
 
 C = humanoid.calcBiasForces(q=q, dq=dq, f_ext=np.zeros(numBody*6)).round(decimals=6)
 Ctrue = importVectorFromFile('vector.txt')

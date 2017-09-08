@@ -563,8 +563,12 @@ I = np.diag(np.array([0.017657, 0.017657, 0.014854]))
 w = np.array([100., 0., 0.])
 w1 = np.array([99.993277,0.821927,-0.817976])
 
-# w = np.array([0., 100., 0.])
-# w1 = np.array([  .821927002e-01,  -.478418377,   99.9954777])
+w = np.array([0., 100., 0.])
+w1 = np.array([  .821927002e-01,  -.478418377,   99.9954777])
+
+# w = np.array([0., 0., 100.])
+# w1 = np.array([  8.17976481e-01,  -9.99954777e+01,  -4.85141851e-01])
+
 
 print(np.dot(R.T, np.dot(crossMat(w), np.dot(I, w))))
 print(np.dot(R.T, np.dot(crossMat(w1), np.dot(I, w1))))
