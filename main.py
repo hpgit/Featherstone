@@ -3,7 +3,7 @@ from Bvh import Bvh, BvhJoint
 from SpatialMath import *
 import numpy.linalg as npl
 
-np.set_printoptions(precision=6, suppress=True, threshold=np.inf)
+# np.set_printoptions(precision=6, suppress=True, threshold=np.inf)
 
 DEBUG = False
 
@@ -144,7 +144,7 @@ qidx = humanoid.getJointQidxByName('LeftToes')
 dq = np.zeros(dof)
 dq[qidx+1] = 100.
 q = np.zeros(dof)
-q[0] = 0.
+q[qidx+1] = 100.
 
 C = humanoid.calcBiasForces(q=q, dq=dq, f_ext=np.zeros(numBody*6)).round(decimals=6)
 Ctrue = importVectorFromFile('vector.txt')
@@ -183,5 +183,4 @@ for i in range(len(C)):
 print('\n\n', npl.norm(C-Ctrue))
 
 # humanoid.calcMassMatrix(q=np.zeros(dof))
-
 

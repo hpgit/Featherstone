@@ -351,8 +351,8 @@ class Skeleton():
         # return X_J, S_i, v_J, c_J
         joint = self.joints[jointIdx]
         X_J = np.dot(joint.i_X_jp, transf(*joint.getTransform(q)))
-        return X_J, joint.S, np.dot(joint.S, dq), np.zeros(6)
-        # return X_J, joint.S, joint.getV(q, dq), np.zeros(6)
+        # return X_J, joint.S, np.dot(joint.S, dq), np.zeros(6)
+        return X_J, joint.S, joint.getV(q, dq), np.zeros(6)
 
     def jcalcPos(self, jointIdx, q):
         # return X_J, S_i
@@ -445,6 +445,10 @@ class Skeleton():
 
             # transformed joint to body version + exponential coordinate version
             body._v = np.dot(body._X_p, body.parentBody._v) + np.dot(joint.i_X_jp, v_J)
+            if npl.norm(np.dot(joint.i_X_jp, v_J)) > 0.001:
+                print(np.dot(joint.i_X_jp, v_J))
+                print(v_J)
+                print(joint.i_X_jp[:3, :3])
             body._a_vp = np.dot(body._X_p, body.parentBody._a_vp) + np.dot(joint.i_X_jp, joint.getCoriolisDV(joint_q, joint_dq))
 
             body._f = np.dot(body.I, body._a_vp) + np.dot(spatialdCross(body._v), np.dot(body.I, body._v)) - np.dot(dual(body._X_0), f_ext[6*i:6*i+6])
@@ -454,9 +458,9 @@ class Skeleton():
 
         for i in range(len(self.bodies)):
             body = self.getBodyByName(nameSet[i])
-            print(body.name + ' _v\n', body._v)
-            print(body.name + ' _a_vp\n', body._a_vp)
-            print(body.name + ' _v\n', body.I)
+            # print(body.name + ' _v\n', body._v)
+            # print(body.name + ' _a_vp\n', body._a_vp)
+            # print(body.name + ' I\n', body.I)
 
         for i in range(len(bodies)-1, 0, -1):
             body = self.bodies[i]
@@ -486,12 +490,15 @@ class Skeleton():
             Cidx += 1
 
         for i in range(1, len(nameSet)):
-            c = self.getJointByName(nameSet[i])._C
+            joint = self.getJointByName(nameSet[i])
+            # c = np.dot(joint.i_X_jp[:3, :3].T, joint._C)
+            c = joint._C
             for j in range(3):
                 # print(c[j])
                 C[Cidx] = c[j]
                 Cidx += 1
         return C
+
 
 
 
@@ -549,3 +556,15 @@ class Skeleton():
             bodyj = self.bodies[j]
             body._F = np.dot(dual(inv(bodyj._X_0)), body._F)
         print(H)
+
+R = np.array([[ 0.99993277,  0.00821927,  0.00817976], [ 0.00821927, -0.00478418, -0.99995478], [-0.00817976,  0.99995478, -0.00485142]])
+
+I = np.diag(np.array([0.017657, 0.017657, 0.014854]))
+w = np.array([100., 0., 0.])
+w1 = np.array([99.993277,0.821927,-0.817976])
+
+# w = np.array([0., 100., 0.])
+# w1 = np.array([  .821927002e-01,  -.478418377,   99.9954777])
+
+print(np.dot(R.T, np.dot(crossMat(w), np.dot(I, w))))
+print(np.dot(R.T, np.dot(crossMat(w1), np.dot(I, w1))))
